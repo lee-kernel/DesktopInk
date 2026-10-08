@@ -1,0 +1,8 @@
+/target/
+/work/
+/outputs/
+*.exe
+*.settings
+*-result.txt
+*-panic.txt
+verification.txt

@@ -1,0 +1,76 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Build Windows x64 executable
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Check configuration serialization
+        run: |
+          $check = Start-Process -FilePath "target/x86_64-pc-windows-msvc/release/desktop-ink.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($check.ExitCode -ne 0) { throw "Self-test failed: $($check.ExitCode)" }
+
+      - name: Package portable application
+        run: |
+          New-Item -ItemType Directory -Path "dist/DesktopInk" -Force | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/desktop-ink.exe" "dist/DesktopInk/DesktopInk.exe"
+          Copy-Item "README.md" "dist/DesktopInk/README.md"
+          Copy-Item "assets/LUCIDE-LICENSE.txt" "dist/DesktopInk/LUCIDE-LICENSE.txt"
+          Compress-Archive -Path "dist/DesktopInk" -DestinationPath "dist/DesktopInk-windows-x64.zip"
+          $hash = (Get-FileHash "dist/DesktopInk-windows-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  DesktopInk-windows-x64.zip" | Set-Content "dist/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@v6
+        with:
+          name: DesktopInk-windows-x64
+          path: |
+            dist/DesktopInk-windows-x64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: DesktopInk-windows-x64
+          path: dist
+      - name: Attach application to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" dist/DesktopInk-windows-x64.zip dist/SHA256SUMS.txt --clobber

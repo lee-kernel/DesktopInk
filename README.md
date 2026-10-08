@@ -2,6 +2,13 @@
 
 使用 Rust 和 Windows 原生 Win32 API 编写的透明桌面文字工具，无第三方 Rust 依赖。
 
+## 下载
+
+- 稳定版本：在 [Releases](https://github.com/lee-kernel/DesktopInk/releases) 下载 `DesktopInk-windows-x64.zip`，解压后运行 `DesktopInk.exe`。附有 SHA256 校验文件。
+- 最新构建：进入 [Windows build](https://github.com/lee-kernel/DesktopInk/actions/workflows/windows-build.yml)，打开成功的运行，在 Artifacts 下载 `DesktopInk-windows-x64`（需要登录 GitHub，保留 30 天）。下载后解压构建产物，再解压其中的软件压缩包。
+
+提交到 main、提交拉取请求或手动运行工作流时，会自动编译 Windows x64 版本并上传下载产物。发布 GitHub Release 时，会自动编译对应版本并将压缩包和校验文件附到该 Release。发布流程不需要额外配置个人访问令牌。
+
 ## 使用
 
 双击 `DesktopInk.exe`。左侧选择文字，右侧编辑后点击“应用并保存”。

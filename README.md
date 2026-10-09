@@ -2,6 +2,12 @@
 
 使用 Rust 和 Windows 原生 Win32 API 编写的透明桌面文字工具，无第三方 Rust 依赖。
 
+## 效果预览
+
+![DesktopInk 管理窗口与桌面文字浮层效果](assets/screenshots/desktop-ink-preview.png)
+
+通过管理窗口设置字体、颜色、透明度、加粗和置顶，文字浮层可自由放置在桌面上。
+
 ## 下载
 
 - 稳定版本：在 [Releases](https://github.com/lee-kernel/DesktopInk/releases) 下载 `DesktopInk-windows-x64.zip`，解压后运行 `DesktopInk.exe`。附有 SHA256 校验文件。

@@ -192,6 +192,7 @@ extern "system" {
     fn SetBkMode(dc: H, m: i32) -> i32;
     fn GetStockObject(n: i32) -> H;
     fn GetTextExtentPoint32W(dc: H, text: *const u16, len: i32, size: *mut Point) -> i32;
+    fn GetObjectW(object: H, size: i32, data: *mut c_void) -> i32;
 }
 #[link(name = "kernel32")]
 extern "system" {
@@ -462,6 +463,7 @@ struct Note {
     clear_background: bool,
     opacity: u8,
     topmost: bool,
+    bold: bool,
     x: i32,
     y: i32,
     width: i32,
@@ -478,6 +480,7 @@ impl Default for Note {
             clear_background: true,
             opacity: 255,
             topmost: false,
+            bold: false,
             x: 80,
             y: 100,
             width: 480,
@@ -566,10 +569,10 @@ fn unhex(s: &str) -> Option<String> {
     String::from_utf8(b?).ok()
 }
 fn encode(notes: &[Note], locked: bool) -> String {
-    let mut s = format!("DesktopInk3\n{}\n", locked as u8);
+    let mut s = format!("DesktopInk4\n{}\n", locked as u8);
     for n in notes {
         s.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             n.x,
             n.y,
             n.width,
@@ -581,7 +584,8 @@ fn encode(notes: &[Note], locked: bool) -> String {
             n.background,
             n.clear_background as u8,
             n.opacity,
-            n.topmost as u8
+            n.topmost as u8,
+            n.bold as u8
         ));
     }
     s
@@ -589,7 +593,7 @@ fn encode(notes: &[Note], locked: bool) -> String {
 fn decode(s: &str) -> Option<(Vec<Note>, bool)> {
     let mut lines = s.lines();
     let version = lines.next()?;
-    if version != "DesktopInk1" && version != "DesktopInk2" && version != "DesktopInk3" {
+    if !["DesktopInk1", "DesktopInk2", "DesktopInk3", "DesktopInk4"].contains(&version) {
         return None;
     }
     let locked = lines.next()? == "1";
@@ -601,8 +605,10 @@ fn decode(s: &str) -> Option<(Vec<Note>, bool)> {
                 8
             } else if version == "DesktopInk2" {
                 11
-            } else {
+            } else if version == "DesktopInk3" {
                 12
+            } else {
+                13
             }
         {
             return None;
@@ -627,7 +633,8 @@ fn decode(s: &str) -> Option<(Vec<Note>, bool)> {
             } else {
                 255
             },
-            topmost: version == "DesktopInk3" && p[11] == "1",
+            topmost: (version == "DesktopInk3" || version == "DesktopInk4") && p[11] == "1",
+            bold: version == "DesktopInk4" && p[12] == "1",
         });
     }
     Some((notes, locked))
@@ -729,6 +736,7 @@ unsafe fn fill_editor() {
         SendMessageW(GetDlgItem(h, 110), 0x405, 1, transparency as isize);
         set(h, 111, &format!("{}%", transparency));
         SendMessageW(GetDlgItem(h, 112), 0xf1, n.topmost as usize, 0);
+        SendMessageW(GetDlgItem(h, 114), 0xf1, n.bold as usize, 0);
         redraw(GetDlgItem(h, 207));
         redraw(GetDlgItem(h, 208));
     }
@@ -843,22 +851,7 @@ unsafe extern "system" fn note_proc(h: H, m: u32, w: usize, l: isize) -> isize {
             DeleteObject(brush);
             let n = APP.with(|a| a.borrow().notes.get(idx as usize).cloned());
             if let Some(n) = n {
-                let font = CreateFontW(
-                    -n.size,
-                    0,
-                    0,
-                    0,
-                    400,
-                    0,
-                    0,
-                    0,
-                    1,
-                    0,
-                    0,
-                    4,
-                    0,
-                    wide(&n.font).as_ptr(),
-                );
+                let font = note_font(&n);
                 let old = SelectObject(dc, font);
                 SetBkMode(dc, 1);
                 r.left = 8;
@@ -866,11 +859,6 @@ unsafe extern "system" fn note_proc(h: H, m: u32, w: usize, l: isize) -> isize {
                 r.right -= 8;
                 r.bottom -= 8;
                 let t = wide(&n.text);
-                let mut shadow = r;
-                shadow.left += 1;
-                shadow.top += 1;
-                SetTextColor(dc, 0);
-                DrawTextW(dc, t.as_ptr(), -1, &mut shadow, 0x10 | 0x800);
                 SetTextColor(dc, n.color);
                 DrawTextW(dc, t.as_ptr(), -1, &mut r, 0x10 | 0x800);
                 SelectObject(dc, old);
@@ -882,6 +870,24 @@ unsafe extern "system" fn note_proc(h: H, m: u32, w: usize, l: isize) -> isize {
         _ => {}
     }
     DefWindowProcW(h, m, w, l)
+}
+unsafe fn note_font(n: &Note) -> H {
+    CreateFontW(
+        -n.size,
+        0,
+        0,
+        0,
+        if n.bold { 700 } else { 400 },
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        4,
+        0,
+        wide(&n.font).as_ptr(),
+    )
 }
 unsafe fn apply(h: H) {
     let Some(i) = selected() else { return };
@@ -914,6 +920,7 @@ unsafe fn apply(h: H) {
     };
     let clear_background = SendMessageW(GetDlgItem(h, 109), 0xf0, 0, 0) == 1;
     let topmost = SendMessageW(GetDlgItem(h, 112), 0xf0, 0, 0) == 1;
+    let bold = SendMessageW(GetDlgItem(h, 114), 0xf0, 0, 0) == 1;
     let transparency = SendMessageW(GetDlgItem(h, 110), 0x400, 0, 0).clamp(0, 90) as u32;
     APP.with(|a| {
         let mut a = a.borrow_mut();
@@ -931,6 +938,7 @@ unsafe fn apply(h: H) {
         n.background = background;
         n.clear_background = clear_background;
         n.topmost = topmost;
+        n.bold = bold;
         n.opacity = ((100 - transparency) * 255 + 50).div_euclid(100) as u8;
     });
     rebuild();
@@ -1129,6 +1137,17 @@ fn main() {
         styled.clear_background = false;
         styled.opacity = 26;
         styled.topmost = true;
+        styled.bold = true;
+        let current = encode(&[styled.clone()], false);
+        let mut old_lines = current.lines();
+        old_lines.next();
+        let lock = old_lines.next().unwrap();
+        let row = old_lines.next().unwrap().rsplit_once('\t').unwrap().0;
+        let previous = format!("DesktopInk3\n{lock}\n{row}\n");
+        let migrated = decode(&previous).unwrap().0.remove(0);
+        assert!(!migrated.bold);
+        assert!(migrated.topmost);
+        assert_eq!(migrated.opacity, 26);
         assert_eq!(
             decode(&encode(&[styled.clone()], false)),
             Some((vec![styled], false))
@@ -1284,6 +1303,7 @@ fn main() {
         control(h, "STATIC", "0%", 111, 0, 706, 516, 62, 24);
         control(h, "BUTTON", "应用并保存", 203, 1, 268, 558, 160, 38);
         control(h, "BUTTON", "移回主屏", 205, 0, 448, 558, 140, 38);
+        control(h, "BUTTON", "字体加粗", 114, 3, 608, 558, 160, 38);
         control(h, "BUTTON", "锁定 / 点击穿透", 204, 0, 268, 610, 320, 38);
         control(h, "BUTTON", "退出程序", 206, 0, 608, 610, 160, 38);
         control(h, "BUTTON", "开机自启动", 210, 3, 22, 488, 222, 28);
@@ -1374,6 +1394,7 @@ fn main() {
             set(h, 105, "#12AB34");
             set(h, 106, "600");
             set(h, 107, "240");
+            SendMessageW(GetDlgItem(h, 114), 0xf1, 1, 0);
             assert!(!GetDlgItem(h, 110).is_null());
             set(h, 108, "#203040");
             pick_color(h, 108);
@@ -1396,6 +1417,18 @@ fn main() {
                 assert_eq!(n.background, 0x403020);
                 assert!(!n.clear_background);
                 assert_eq!(n.opacity, 153);
+                assert!(n.bold);
+                let font = note_font(n);
+                let mut lf: LogFont = std::mem::zeroed();
+                assert!(
+                    GetObjectW(
+                        font,
+                        std::mem::size_of::<LogFont>() as i32,
+                        &mut lf as *mut _ as *mut c_void
+                    ) > 0
+                );
+                assert_eq!(lf.weight, 700);
+                DeleteObject(font);
             });
             let overlay = APP.with(|a| a.borrow().windows[1]);
             let mut key = 0;
@@ -1417,6 +1450,21 @@ fn main() {
             assert_eq!(alpha, 26);
             assert_eq!(flags, 3);
             assert_ne!(GetWindowLongPtrW(overlay, -20) & 8, 0);
+            SendMessageW(GetDlgItem(h, 114), 0xf1, 0, 0);
+            SendMessageW(h, 0x111, 203, 0);
+            APP.with(|a| {
+                let a = a.borrow();
+                assert!(!a.notes[1].bold);
+                let font = note_font(&a.notes[1]);
+                let mut lf: LogFont = std::mem::zeroed();
+                GetObjectW(
+                    font,
+                    std::mem::size_of::<LogFont>() as i32,
+                    &mut lf as *mut _ as *mut c_void,
+                );
+                assert_eq!(lf.weight, 400);
+                DeleteObject(font);
+            });
             assert!(!startup_enabled());
             set_startup(true).unwrap();
             assert!(startup_enabled());

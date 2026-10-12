@@ -1,6 +1,11 @@
 #![windows_subsystem = "windows"]
 #![allow(non_snake_case)]
 use std::{cell::RefCell, ffi::c_void, path::PathBuf};
+mod update;
+thread_local! {
+    static UPDATE_CHECK: RefCell<Option<std::sync::mpsc::Receiver<Result<update::Release, String>>>> = const { RefCell::new(None) };
+}
+const UPDATE_TIMER: usize = 302;
 type H = *mut c_void;
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
@@ -86,6 +91,14 @@ struct NotifyIconData {
 #[link(name = "shell32")]
 extern "system" {
     fn Shell_NotifyIconW(action: u32, data: *const NotifyIconData) -> i32;
+    fn ShellExecuteW(
+        h: H,
+        operation: *const u16,
+        file: *const u16,
+        parameters: *const u16,
+        directory: *const u16,
+        show: i32,
+    ) -> H;
 }
 #[link(name = "user32")]
 extern "system" {
@@ -157,6 +170,9 @@ extern "system" {
     fn DestroyMenu(menu: H) -> i32;
     fn GetCursorPos(point: *mut Point) -> i32;
     fn PostMessageW(h: H, msg: u32, w: usize, l: isize) -> i32;
+    fn SetTimer(h: H, id: usize, milliseconds: u32, callback: H) -> usize;
+    fn KillTimer(h: H, id: usize) -> i32;
+    fn EnableWindow(h: H, enabled: i32) -> i32;
 }
 #[link(name = "gdi32")]
 extern "system" {
@@ -531,6 +547,18 @@ unsafe fn tray_menu(h: H) {
         return;
     }
     AppendMenuW(menu, 0, 301, wide("打开管理窗口").as_ptr());
+    let checking = UPDATE_CHECK.with(|state| state.borrow().is_some());
+    AppendMenuW(
+        menu,
+        if checking { 3 } else { 0 },
+        302,
+        wide(if checking {
+            "正在检查更新…"
+        } else {
+            "检查更新"
+        })
+        .as_ptr(),
+    );
     AppendMenuW(menu, 0x800, 0, std::ptr::null());
     AppendMenuW(menu, 0, 206, wide("退出程序").as_ptr());
     let mut p = Point::default();
@@ -543,6 +571,91 @@ unsafe fn tray_menu(h: H) {
         restore_manager(h)
     } else if command == 206 {
         SendMessageW(h, 0x111, 206, 0);
+    } else if command == 302 {
+        start_update_check(h);
+    }
+}
+unsafe fn start_update_check(h: H) {
+    if UPDATE_CHECK.with(|state| state.borrow().is_some()) {
+        return;
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    if SetTimer(h, UPDATE_TIMER, 200, std::ptr::null_mut()) == 0 {
+        popup(h, "无法启动检查更新，请重试。");
+        return;
+    }
+    if std::thread::Builder::new()
+        .name("update-check".into())
+        .spawn(move || {
+            let _ = sender.send(update::check());
+        })
+        .is_err()
+    {
+        KillTimer(h, UPDATE_TIMER);
+        popup(h, "无法启动检查更新，请重试。");
+        return;
+    }
+    UPDATE_CHECK.with(|state| *state.borrow_mut() = Some(receiver));
+    SetWindowTextW(GetDlgItem(h, 302), wide("正在检查更新…").as_ptr());
+    EnableWindow(GetDlgItem(h, 302), 0);
+}
+unsafe fn finish_update_check(h: H) {
+    let result = UPDATE_CHECK.with(|state| {
+        let state = state.borrow();
+        match state.as_ref()?.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Some(Err("检查更新意外中断，请重试。".into()))
+            }
+        }
+    });
+    let Some(result) = result else {
+        return;
+    };
+    KillTimer(h, UPDATE_TIMER);
+    UPDATE_CHECK.with(|state| *state.borrow_mut() = None);
+    SetWindowTextW(GetDlgItem(h, 302), wide("检查更新").as_ptr());
+    EnableWindow(GetDlgItem(h, 302), 1);
+    restore_manager(h);
+    match result {
+        Ok(release) if release.newer => {
+            let message = format!("发现新版本 {}\n当前版本 {}\n\n是否打开发布页面下载？\n下载后请退出程序再替换，保留 desktop-ink.settings。", release.tag, update::CURRENT);
+            if MessageBoxW(h, wide(&message).as_ptr(), wide("检查更新").as_ptr(), 0x24) == 6 {
+                if ShellExecuteW(
+                    h,
+                    wide("open").as_ptr(),
+                    wide(&release.url).as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1,
+                ) as isize
+                    <= 32
+                {
+                    popup(
+                        h,
+                        &format!("无法打开浏览器，请手动访问：\n{}", update::RELEASES),
+                    );
+                }
+            }
+        }
+        Ok(release) => {
+            MessageBoxW(
+                h,
+                wide(&format!(
+                    "当前无需更新。\n当前版本 {}\n最新发布 {}",
+                    update::CURRENT,
+                    release.tag
+                ))
+                .as_ptr(),
+                wide("检查更新").as_ptr(),
+                0x40,
+            );
+        }
+        Err(error) => popup(
+            h,
+            &format!("检查更新失败\n当前版本 {}\n\n{error}", update::CURRENT),
+        ),
     }
 }
 thread_local! {static APP:RefCell<App>=RefCell::new(App::default());}
@@ -964,6 +1077,10 @@ unsafe extern "system" fn manager_proc(h: H, m: u32, w: usize, l: isize) -> isiz
                 return 1;
             }
         }
+        0x113 if w == UPDATE_TIMER => {
+            finish_update_check(h);
+            return 0;
+        }
         0x114 => {
             if l == GetDlgItem(h, 110) as isize {
                 let value = SendMessageW(GetDlgItem(h, 110), 0x400, 0, 0);
@@ -1033,6 +1150,7 @@ unsafe extern "system" fn manager_proc(h: H, m: u32, w: usize, l: isize) -> isiz
                     }
                 }
                 203 => apply(h),
+                302 => start_update_check(h),
                 206 => {
                     save();
                     DestroyWindow(h);
@@ -1074,6 +1192,8 @@ unsafe extern "system" fn manager_proc(h: H, m: u32, w: usize, l: isize) -> isiz
             return 0;
         }
         0x02 => {
+            KillTimer(h, UPDATE_TIMER);
+            UPDATE_CHECK.with(|state| *state.borrow_mut() = None);
             if APP.with(|a| a.borrow().tray) {
                 Shell_NotifyIconW(2, &tray_data(h));
                 APP.with(|a| a.borrow_mut().tray = false);
@@ -1107,6 +1227,17 @@ unsafe fn register(
     RegisterClassW(&wc);
 }
 fn main() {
+    if std::env::args().any(|a| a == "--update-check-test") {
+        let result = update::check();
+        std::fs::write(
+            std::env::current_exe()
+                .unwrap()
+                .with_file_name("update-check-result.txt"),
+            format!("{result:?}\n"),
+        )
+        .unwrap();
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     if std::env::args().any(|a| a == "--smoke-test") {
         std::panic::set_hook(Box::new(|info| {
             let _ = std::fs::write(
@@ -1230,9 +1361,10 @@ fn main() {
         }
         APP.with(|a| a.borrow_mut().manager = h);
         control(h, "STATIC", "桌面文字", 0, 0, 22, 18, 180, 26);
-        control(h, "LISTBOX", "", 101, 0x200001 | 0x100000, 22, 52, 220, 385);
-        control(h, "BUTTON", "添加", 201, 0, 22, 450, 104, 34);
-        control(h, "BUTTON", "删除", 202, 0, 138, 450, 104, 34);
+        control(h, "LISTBOX", "", 101, 0x200001 | 0x100000, 22, 52, 220, 345);
+        control(h, "BUTTON", "添加", 201, 0, 22, 410, 104, 34);
+        control(h, "BUTTON", "删除", 202, 0, 138, 410, 104, 34);
+        control(h, "BUTTON", "检查更新", 302, 0, 22, 450, 220, 34);
         control(h, "STATIC", "文字内容（支持多行）", 0, 0, 268, 18, 460, 26);
         control(
             h,
@@ -1349,7 +1481,7 @@ fn main() {
             GetClientRect(h, &mut client);
             for id in [
                 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 201, 202, 203, 204,
-                205, 206, 207, 208, 210, 211, 212, 213,
+                205, 206, 207, 208, 210, 211, 212, 213, 302,
             ] {
                 let child = GetDlgItem(h, id);
                 assert!(!child.is_null());

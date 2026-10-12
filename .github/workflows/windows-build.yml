@@ -37,6 +37,9 @@ jobs:
           $check = Start-Process -FilePath "target/x86_64-pc-windows-msvc/release/desktop-ink.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($check.ExitCode -ne 0) { throw "Self-test failed: $($check.ExitCode)" }
 
+      - name: Check update version comparison and release URLs
+        run: cargo test --locked --target x86_64-pc-windows-msvc
+
       - name: Package portable application
         run: |
           New-Item -ItemType Directory -Path "dist/DesktopInk" -Force | Out-Null

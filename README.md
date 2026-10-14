@@ -1,5 +1,7 @@
 # Desktop Ink · 桌面文字
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE) · [![LinuxDO](https://img.shields.io/badge/community-LinuxDO-FFA500)](https://linux.do/)
+
 使用 Rust 和 Windows 原生 Win32 API 编写的透明桌面文字工具，无第三方 Rust 依赖。
 
 ## 效果预览
@@ -90,3 +92,7 @@ cargo build --release
 应用图标采用 [Lucide 的 Type 图标](https://lucide.dev/icons/type)，添加蓝色圆角底色，并生成 16–256 像素的多尺寸 ICO。原始 SVG、转换脚本和完整授权文本均保存在 `assets/` 中。
 
 图标来源：[Lucide 官方仓库](https://github.com/lucide-icons/lucide/blob/main/icons/type.svg)。此图标源于 Feather；完整许可证包含 Lucide ISC 和 Feather MIT 授权，见 `assets/LUCIDE-LICENSE.txt`。
+
+## 开源协议
+
+DesktopInk 基于 [MIT 许可证](LICENSE) 开源。第三方依赖、社区样例与素材遵循各自的许可声明。

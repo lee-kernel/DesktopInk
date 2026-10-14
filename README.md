@@ -93,6 +93,10 @@ cargo build --release
 
 图标来源：[Lucide 官方仓库](https://github.com/lucide-icons/lucide/blob/main/icons/type.svg)。此图标源于 Feather；完整许可证包含 Lucide ISC 和 Feather MIT 授权，见 `assets/LUCIDE-LICENSE.txt`。
 
+## 社区交流
+
+欢迎到 [LinuxDO](https://linux.do/) 社区交流 DesktopInk 的使用体验、桌面文字展示技巧与功能建议。
+
 ## 开源协议
 
 DesktopInk 基于 [MIT 许可证](LICENSE) 开源。第三方依赖、社区样例与素材遵循各自的许可声明。
